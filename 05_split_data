@@ -3,8 +3,8 @@ import pandas as pd
 from sklearn.model_selection import train_test_split
 import os
 
-input_file = "scenario_1_balanced_world/s1_balanced_source.csv"
-output_dir = "scenario_1_balanced_world/splits"
+input_file = 'modeling_cohort.csv'
+output_dir = 'splits'
 
 TRAIN_SIZE = 0.70
 VALIDATION_SIZE = 0.15
