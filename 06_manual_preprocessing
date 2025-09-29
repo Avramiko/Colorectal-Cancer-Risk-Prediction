@@ -1,0 +1,118 @@
+# File: 06_manual_preprocessing.py
+# Manual preprocessing with explicit variable types and controlled OneHotEncoder order
+
+import pandas as pd
+import numpy as np
+import joblib
+import os
+from sklearn.preprocessing import OneHotEncoder
+
+splits_dir = 'splits'
+output_dir = 'processed_data_manual'
+os.makedirs(output_dir, exist_ok=True)
+encoder_path = os.path.join(output_dir, "one_hot_encoder.joblib")
+
+train_data = pd.read_csv(os.path.join(splits_dir, "train_set.csv"))
+val_data = pd.read_csv(os.path.join(splits_dir, "validation_set.csv"))
+test_data = pd.read_csv(os.path.join(splits_dir, "test_set.csv"))
+
+features_train = train_data.drop(columns=["CRC_event", "eid"])
+target_train = train_data["CRC_event"]
+features_val = val_data.drop(columns=["CRC_event", "eid"])
+target_val = val_data["CRC_event"]
+features_test = test_data.drop(columns=["CRC_event", "eid"])
+target_test = test_data["CRC_event"]
+
+print(f"Original training features shape: {features_train.shape}")
+
+# Non-binary categoricals (to be one-hot encoded)
+categorical_for_encoding = [
+    "1170-0.0", "1180-0.0", "1190-0.0", "1200-0.0", "1220-0.0",
+    "1349-0.0", "1369-0.0", "1558-0.0", "20116-0.0", "21000-0.0",
+    "22032-0.0", "6138-0.0", "738-0.0", "sleep_disorder_status",
+]
+
+# Binary categoricals (impute only, no encoding)
+binary_categorical_features = [
+    "31-0.0", "1210-0.0", "family_history_CRC", "had_bowel_procedure_before_baseline",
+    "had_relevant_gi_illness_baseline", "has_IBD_baseline", "has_diabetes_baseline",
+    "takes_chronic_meds_at_baseline",
+]
+
+numeric_features = [
+    col for col in features_train.columns
+    if col not in categorical_for_encoding and col not in binary_categorical_features
+]
+
+print(
+    f"Identified {len(numeric_features)} numeric, "
+    f"{len(binary_categorical_features)} binary, "
+    f"and {len(categorical_for_encoding)} non-binary categorical features."
+)
+
+# Learn imputation values on training set
+train_medians = features_train[numeric_features].median()
+all_categorical = categorical_for_encoding + binary_categorical_features
+train_modes = features_train[all_categorical].mode().iloc[0]
+
+# Learn outlier caps on training set
+lower_caps = features_train[numeric_features].quantile(0.01)
+upper_caps = features_train[numeric_features].quantile(0.99)
+
+# Learn One-Hot categories (sorted) and fit encoder
+sorted_categories = [sorted(features_train[col].dropna().unique()) for col in categorical_for_encoding]
+encoder = OneHotEncoder(categories=sorted_categories, handle_unknown="ignore", sparse_output=False)
+encoder.fit(features_train[categorical_for_encoding])
+joblib.dump(encoder, encoder_path)
+print(f"Saved encoder to: '{encoder_path}'")
+
+def preprocess_data(df: pd.DataFrame, rules: dict) -> pd.DataFrame:
+    df_processed = df.copy()
+
+    # Imputation
+    df_processed[numeric_features] = df_processed[numeric_features].fillna(rules["medians"])
+    df_processed[all_categorical] = df_processed[all_categorical].fillna(rules["modes"])
+
+    # Outlier capping
+    df_processed[numeric_features] = df_processed[numeric_features].clip(
+        lower=rules["lower_caps"], upper=rules["upper_caps"], axis=1
+    )
+
+    # One-hot for non-binary categoricals
+    encoded = rules["encoder"].transform(df_processed[categorical_for_encoding])
+    encoded_df = pd.DataFrame(
+        encoded,
+        columns=rules["encoder"].get_feature_names_out(categorical_for_encoding),
+        index=df_processed.index,
+    )
+
+    # Combine numeric + encoded categoricals + binary categoricals
+    final_df = pd.concat(
+        [df_processed[numeric_features], encoded_df, df_processed[binary_categorical_features]],
+        axis=1,
+    )
+    return final_df
+
+learned_rules = {
+    "medians": train_medians,
+    "modes": train_modes,
+    "lower_caps": lower_caps,
+    "upper_caps": upper_caps,
+    "encoder": encoder,
+}
+
+features_train_processed = preprocess_data(features_train, learned_rules)
+features_val_processed = preprocess_data(features_val, learned_rules)
+features_test_processed = preprocess_data(features_test, learned_rules)
+
+print(f"Processed training features shape: {features_train_processed.shape}")
+
+train_processed = pd.concat([train_data[["eid", "CRC_event"]], features_train_processed], axis=1)
+val_processed = pd.concat([val_data[["eid", "CRC_event"]], features_val_processed], axis=1)
+test_processed = pd.concat([test_data[["eid", "CRC_event"]], features_test_processed], axis=1)
+
+train_processed.to_csv(os.path.join(output_dir, "train_processed_manual.csv"), index=False)
+val_processed.to_csv(os.path.join(output_dir, "validation_processed_manual.csv"), index=False)
+test_processed.to_csv(os.path.join(output_dir, "test_processed_manual.csv"), index=False)
+
+print(f"Saved processed files to '{output_dir}'")
