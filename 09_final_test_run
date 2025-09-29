@@ -1,0 +1,37 @@
+# File: 09_final_test_run.py
+# Purpose: Load the final champion model and evaluate its performance on the untouched test set.
+
+import utils_06_5 as utils
+import joblib
+import os
+from sklearn.metrics import classification_report
+
+# --- Configuration ---
+PROCESSED_DATA_DIR = "processed_data_manual"
+MODEL_OUTPUT_DIR = "modeling_results"
+FINAL_MODEL_PATH = os.path.join(MODEL_OUTPUT_DIR, "xgboost_final_tuned_model.joblib")
+
+# --- Load the Test Data ---
+_, _, _, _, X_test, y_test = utils.load_processed_data(data_directory=PROCESSED_DATA_DIR)
+
+# --- Load the Trained Champion Model ---
+try:
+    final_model = joblib.load(FINAL_MODEL_PATH)
+except FileNotFoundError:
+    print("❌ ERROR: Model file not found. Please run the final training script (07d) first.")
+    exit()
+
+# --- Make Final Predictions ---
+y_test_pred = final_model.predict(X_test)
+y_test_pred_proba = final_model.predict_proba(X_test)[:, 1]
+
+# --- Final Evaluation ---
+MODEL_NAME = "XGBoost (Final Tuned Model on Test Set)"
+
+print("\nFinal Classification Report:")
+print(classification_report(y_test, y_test_pred))
+
+# Generate evaluation plots
+utils.plot_confusion_matrix_professional(y_test, y_test_pred, MODEL_NAME, MODEL_OUTPUT_DIR)
+utils.plot_roc_curve(y_test, y_test_pred_proba, MODEL_NAME, MODEL_OUTPUT_DIR)
+utils.plot_precision_recall_curve(y_test, y_test_pred_proba, MODEL_NAME, MODEL_OUTPUT_DIR)
