@@ -1,0 +1,47 @@
+# File: 09_shap_analysis.py
+# Purpose: Explain the final XGBoost model's predictions using SHAP.
+
+import utils_06_5 as utils
+import joblib
+import os
+import shap
+import numpy as np
+import matplotlib.pyplot as plt
+from feature_dictionary import feature_name_map
+
+# --- Configuration ---
+PROCESSED_DATA_DIR = "processed_data_manual"
+MODEL_OUTPUT_DIR = "modeling_results"
+FINAL_MODEL_PATH = os.path.join(MODEL_OUTPUT_DIR, "xgboost_final_tuned_model.joblib")
+SHAP_OUTPUT_DIR = os.path.join(MODEL_OUTPUT_DIR, "shap_plots")
+os.makedirs(SHAP_OUTPUT_DIR, exist_ok=True)
+
+# --- Load Data and Model ---
+X_train, y_train, X_val, y_val, X_test, y_test = utils.load_processed_data(data_directory=PROCESSED_DATA_DIR)
+final_model = joblib.load(FINAL_MODEL_PATH)
+
+# --- Calculate SHAP Values ---
+explainer = shap.TreeExplainer(final_model)
+shap_values = explainer.shap_values(X_test)
+
+# --- Global Feature Importance (Summary Plot) ---
+X_test_renamed = X_test.rename(columns=feature_name_map)
+plt.figure(figsize=(10, 15))
+shap.summary_plot(shap_values, X_test_renamed, show=False, max_display=40)
+plt.title("Global Feature Importance (Top 40 Features)", fontsize=14)
+plt.savefig(os.path.join(SHAP_OUTPUT_DIR, "shap_summary_plot_renamed.png"), dpi=300, bbox_inches="tight")
+plt.close()
+
+# --- Individual Prediction Explanation (Force Plot) ---
+y_test_pred = final_model.predict(X_test)
+true_positives_indices = np.where((y_test == 1) & (y_test_pred == 1))[0]
+
+if len(true_positives_indices) > 0:
+    idx_to_explain = true_positives_indices[0]
+    force_plot = shap.force_plot(
+        explainer.expected_value,
+        shap_values[idx_to_explain, :],
+        X_test_renamed.iloc[idx_to_explain, :],
+        matplotlib=False
+    )
+    shap.save_html(os.path.join(SHAP_OUTPUT_DIR, "shap_force_plot_true_positive.html"), force_plot)
