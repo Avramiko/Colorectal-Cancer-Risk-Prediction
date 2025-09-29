@@ -15,11 +15,7 @@ FINAL_MODEL_PATH = os.path.join(MODEL_OUTPUT_DIR, "xgboost_final_tuned_model.job
 _, _, _, _, X_test, y_test = utils.load_processed_data(data_directory=PROCESSED_DATA_DIR)
 
 # --- Load the Trained Champion Model ---
-try:
-    final_model = joblib.load(FINAL_MODEL_PATH)
-except FileNotFoundError:
-    print("❌ ERROR: Model file not found. Please run the final training script (07d) first.")
-    exit()
+final_model = joblib.load(FINAL_MODEL_PATH)
 
 # --- Make Final Predictions ---
 y_test_pred = final_model.predict(X_test)
