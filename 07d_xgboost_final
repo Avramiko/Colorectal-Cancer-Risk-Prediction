@@ -1,0 +1,60 @@
+# File: 07d_xgboost_final.py
+# Purpose: Train the FINAL tuned XGBoost model and generate evaluation metrics and plots.
+
+import utils_06_5 as utils
+import xgboost as xgb
+from sklearn.metrics import classification_report
+import joblib
+import os
+
+# --- 1. Configuration ---
+PROCESSED_DATA_DIR = "processed_data_manual"
+MODEL_OUTPUT_DIR = "modeling_results"
+os.makedirs(MODEL_OUTPUT_DIR, exist_ok=True)
+model_path = os.path.join(MODEL_OUTPUT_DIR, "xgboost_final_tuned_model.joblib")
+
+# --- 2. Load Data ---
+X_train, y_train, X_val, y_val, X_test, y_test = utils.load_processed_data(PROCESSED_DATA_DIR)
+
+# --- 3. Initialize the XGBoost Model with the Best Parameters ---
+best_params = {
+    "subsample": 0.8,
+    "reg_lambda": 0.01,
+    "reg_alpha": 1,
+    "n_estimators": 400,
+    "max_depth": 3,
+    "learning_rate": 0.01,
+    "gamma": 0.2,
+    "colsample_bytree": 0.7,
+}
+
+count_neg = y_train.value_counts()[0]
+count_pos = y_train.value_counts()[1]
+scale_pos_weight_value = count_neg / count_pos
+
+final_xgb_model = xgb.XGBClassifier(
+    objective="binary:logistic",
+    scale_pos_weight=scale_pos_weight_value,
+    eval_metric="logloss",
+    random_state=42,
+    n_jobs=-1,
+    **best_params
+)
+
+# --- 4. Train the Final Model ---
+final_xgb_model.fit(X_train, y_train)
+
+# --- 5. Save the Final Model ---
+joblib.dump(final_xgb_model, model_path)
+
+# --- 6. Evaluate on Validation Set ---
+y_val_pred = final_xgb_model.predict(X_val)
+y_val_pred_proba = final_xgb_model.predict_proba(X_val)[:, 1]
+
+print("\nClassification Report:")
+print(classification_report(y_val, y_val_pred))
+
+MODEL_NAME = "XGBoost (Tuned)"
+utils.plot_confusion_matrix_professional(y_val, y_val_pred, MODEL_NAME, MODEL_OUTPUT_DIR)
+utils.plot_roc_curve(y_val, y_val_pred_proba, MODEL_NAME, MODEL_OUTPUT_DIR)
+utils.plot_precision_recall_curve(y_val, y_val_pred_proba, MODEL_NAME, MODEL_OUTPUT_DIR)
