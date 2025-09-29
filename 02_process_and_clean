@@ -7,16 +7,12 @@ import numpy as np
 source_file = "filtered_sleep_crc_data.csv"
 output_file = "processed_clean_with_arrays.csv"
 
-print("--- Running Script 02: Process and Clean ---")
-print("Loading data...")
 data = pd.read_csv(source_file, dtype={"eid": str}, low_memory=False)
 print(f"Data loaded. Initial shape: {data.shape}")
 
-print("Cleaning negative values...")
 numeric_columns = data.select_dtypes(include=[np.number]).columns
 data[numeric_columns] = data[numeric_columns].where(data[numeric_columns] >= 0, np.nan)
 
-print("Converting date columns...")
 date_prefixes = (
     "53-", "40000-", "191-", "130706-", "130708-",
     "131626-", "131628-", "131060-", "40005-", "41282-", "41280-"
@@ -26,9 +22,4 @@ date_columns = [col for col in data.columns if col.startswith(date_prefixes)]
 for col in date_columns:
     data[col] = pd.to_datetime(data[col], errors="coerce", dayfirst=True)
 
-print(f"Converted {len(date_columns)} date columns.")
-
 data.to_csv(output_file, index=False)
-print(f"\nFile saved: {output_file}")
-print(f"Final shape: {data.shape}")
-print("--- Script 02 Finished Successfully ---")
