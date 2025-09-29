@@ -1,0 +1,165 @@
+# File: 03_build_final_dataset.py
+import pandas as pd
+import numpy as np
+import os
+
+input_file = "processed_clean_with_arrays.csv"
+output_file = "final_analytical_cohort.csv"
+
+CRC_ICD10_CODES = ["C18", "C19", "C20"]
+FAMILY_HISTORY_CRC_CODE = 4.0
+RELEVANT_ILLNESS_CODES = [1460, 1462, 1463, 1518, 1456]
+RELEVANT_OPCS_PREFIXES = [
+    "H04", "H05", "H06", "H07", "H08", "H09", "H10", "H11", "H12",
+    "H20", "H22", "H23", "H25", "H26", "H28", "H29", "H33", "U17.5",
+]
+ALL_SLEEP_ICD_CODES = ["G470", "G471", "G472", "G473", "G474", "G478", "G479"]
+TARGET_SLEEP_CODES = {"apnea": "G473", "insomnia": "G470", "hypersomnia": "G471"}
+
+data = pd.read_csv(input_file, dtype={"eid": str}, low_memory=False)
+date_columns = [
+    c for c in data.columns
+    if c.startswith(("53-", "40005-", "41282-", "41280-", "130706-", "130708-", "131626-", "131628-", "131060-"))
+]
+for col in date_columns:
+    if col in data.columns:
+        data[col] = pd.to_datetime(data[col], errors="coerce")
+print(f"Data shape: {data.shape}")
+
+baseline_date_col = "53-0.0"
+cancer_type_cols = sorted([c for c in data.columns if c.startswith("40006-")])
+cancer_date_cols = sorted([c for c in data.columns if c.startswith("40005-")])
+
+def first_crc_date(row: pd.Series):
+    dates = [
+        row[d]
+        for t, d in zip(cancer_type_cols, cancer_date_cols)
+        if any(code in str(row[t]) for code in CRC_ICD10_CODES) and pd.notna(row[d])
+    ]
+    return min(dates) if dates else pd.NaT
+
+data["first_crc_date"] = data.apply(first_crc_date, axis=1)
+prevalent_mask = (
+    data["first_crc_date"].notna()
+    & data[baseline_date_col].notna()
+    & (data["first_crc_date"] <= data[baseline_date_col])
+)
+print(f"Removing {prevalent_mask.sum()} prevalent CRC cases.")
+cohort = data[~prevalent_mask].copy()
+cohort.dropna(subset=[baseline_date_col], inplace=True)
+print(f"Cohort size after exclusion: {len(cohort)}")
+
+family_hist_cols = [c for c in cohort.columns if c.startswith(("20107-", "20110-", "20111-"))]
+cohort["family_history_CRC"] = (cohort[family_hist_cols] == FAMILY_HISTORY_CRC_CODE).any(axis=1).astype(int)
+
+gi_cols = [c for c in cohort.columns if c.startswith("20002-")]
+cohort["had_relevant_gi_illness_baseline"] = cohort[gi_cols].isin(RELEVANT_ILLNESS_CODES).any(axis=1).astype(int)
+
+surgery_code_cols = [c for c in cohort.columns if c.startswith("41272-")]
+surgery_date_cols = [c for c in cohort.columns if c.startswith("41282-")]
+if surgery_code_cols:
+    had_bowel_proc_mask = pd.Series(False, index=cohort.index)
+    for code_col, date_col in zip(surgery_code_cols, surgery_date_cols):
+        had_bowel_proc_mask |= (
+            cohort[code_col].astype(str).str.startswith(tuple(RELEVANT_OPCS_PREFIXES), na=False)
+            & (cohort[date_col] < cohort[baseline_date_col])
+        ).fillna(False)
+    cohort["had_bowel_procedure_before_baseline"] = had_bowel_proc_mask.astype(int)
+else:
+    cohort["had_bowel_procedure_before_baseline"] = 0
+
+med_cols = [c for c in cohort.columns if c.startswith("6153-0.")]
+cohort["takes_chronic_meds_at_baseline"] = (cohort[med_cols].notna().any(axis=1).astype(int)) if med_cols else 0
+
+comorbidity_date_fields = {
+    "has_diabetes_baseline": ["130706-0.0", "130708-0.0"],
+    "has_IBD_baseline": ["131626-0.0", "131628-0.0"],
+    "had_G47_dx_at_baseline": ["131060-0.0"],
+}
+for flag_name, fields in comorbidity_date_fields.items():
+    mask = pd.Series(False, index=cohort.index)
+    for d in fields:
+        if d in cohort.columns:
+            mask |= (cohort[d].notna() & (cohort[d] <= cohort[baseline_date_col])).fillna(False)
+    cohort[flag_name] = mask.astype(int)
+
+date_based_diabetes = cohort["has_diabetes_baseline"] == 1
+cohort["2443-0.0"] = pd.to_numeric(cohort["2443-0.0"], errors="coerce")
+self_report_diabetes = cohort["2443-0.0"] == 1
+final_diabetes = date_based_diabetes | self_report_diabetes
+print(f"   - Cases based on dates only: {date_based_diabetes.sum()}")
+print(f"   - Cases based on self-report (2443-0.0 == 1): {self_report_diabetes.sum()}")
+cohort["has_diabetes_baseline"] = final_diabetes.astype(int)
+print(f"   - Total cases after combining sources: {cohort['has_diabetes_baseline'].sum()}")
+
+start_col, stop_col, recruit_col, status_col = "2867-0.0", "2897-0.0", "21022-0.0", "20116-0.0"
+cohort["smoking_duration"] = np.nan
+if all(c in cohort.columns for c in [start_col, stop_col, recruit_col, status_col]):
+    cohort[start_col] = pd.to_numeric(cohort[start_col], errors="coerce")
+    cohort[stop_col] = pd.to_numeric(cohort[stop_col], errors="coerce")
+    cohort.loc[cohort[status_col] == 2, "smoking_duration"] = cohort[recruit_col] - cohort[start_col]
+    cohort.loc[cohort[status_col] == 1, "smoking_duration"] = cohort[stop_col] - cohort[start_col]
+    cohort.loc[cohort[status_col] == 0, "smoking_duration"] = 0
+    cohort.loc[cohort["smoking_duration"] < 0, "smoking_duration"] = np.nan
+
+dx_code_cols = sorted([c for c in cohort.columns if c.startswith("41270-")])
+dx_date_cols = sorted([c for c in cohort.columns if c.startswith("41280-")])
+
+dx_long = cohort[["eid"] + dx_code_cols].melt(id_vars="eid", value_vars=dx_code_cols, value_name="dx_code")
+sleep_dx = dx_long[dx_long["dx_code"].str.contains("|".join(ALL_SLEEP_ICD_CODES), na=False)].copy()
+sleep_dx["specific_code"] = sleep_dx["dx_code"].str.extract(r"(G47[0-9])")[0]
+sleep_dx_counts = sleep_dx.groupby("eid")["specific_code"].nunique()
+eids_single_dx = sleep_dx_counts[sleep_dx_counts == 1].index
+single_dx_map = (
+    sleep_dx[sleep_dx["eid"].isin(eids_single_dx)]
+    .drop_duplicates(subset="eid")
+    .set_index("eid")["specific_code"]
+)
+print(f"   - Individuals with a single sleep dx type: {len(eids_single_dx)}")
+
+for sleep_name, target_code in TARGET_SLEEP_CODES.items():
+    direct_mask = pd.Series(False, index=cohort.index)
+    for code_col, date_col in zip(dx_code_cols, dx_date_cols):
+        direct_mask |= (
+            cohort[code_col].astype(str).str.contains(target_code, na=False)
+            & (cohort[date_col] <= cohort[baseline_date_col])
+        ).fillna(False)
+
+    inferred_base = cohort["had_G47_dx_at_baseline"] == 1
+    is_single_target = (cohort["eid"].map(single_dx_map) == target_code).fillna(False)
+    inferred_mask = inferred_base & is_single_target
+
+    final_mask = direct_mask | inferred_mask
+    flag_col = f"had_{sleep_name}_baseline"
+    cohort[flag_col] = final_mask.astype(int)
+    print(f"     - {flag_col}: {cohort[flag_col].sum()}")
+
+cohort["CRC_event"] = np.where(cohort["first_crc_date"].notna(), 1, 0)
+print(f"Incident CRC cases: {cohort['CRC_event'].sum()}")
+
+conditions = [
+    cohort["had_apnea_baseline"] == 1,
+    (cohort["had_insomnia_baseline"] == 1) | (cohort["had_hypersomnia_baseline"] == 1),
+    cohort["had_G47_dx_at_baseline"] == 1,
+]
+choices = [1, 2, 3]
+cohort["sleep_disorder_status"] = np.select(conditions, choices, default=0)
+print(cohort["sleep_disorder_status"].value_counts())
+
+final_cols = [
+    "eid", "CRC_event", "family_history_CRC", "had_relevant_gi_illness_baseline",
+    "had_bowel_procedure_before_baseline", "has_diabetes_baseline", "has_IBD_baseline",
+    "takes_chronic_meds_at_baseline", "smoking_duration", "sleep_disorder_status",
+]
+final_cols += [c for c in cohort.columns if c.endswith("-0.0")]
+final_cols = sorted(list(set(final_cols) & set(cohort.columns)))
+final = cohort[final_cols].copy()
+if "53-0.0" in final.columns:
+    final.drop("53-0.0", axis=1, inplace=True)
+
+os.makedirs(os.path.dirname(output_file), exist_ok=True)
+final.to_csv(output_file, index=False)
+
+print(f"Saved final file as '{output_file}'")
+print(f"Final dataset shape: {final.shape}")
+print(f"Number of CRC events: {final['CRC_event'].sum()}")
