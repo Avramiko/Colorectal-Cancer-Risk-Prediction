@@ -1,0 +1,54 @@
+# File: 07e_lightgbm_tuning.py
+# Purpose: Find best hyperparameters for LightGBM using RandomizedSearchCV.
+
+import utils_06_5 as utils
+import lightgbm as lgb
+from sklearn.model_selection import RandomizedSearchCV
+import numpy as np
+
+# --- Load Data ---
+X_train, y_train, X_val, y_val, _, _ = utils.load_processed_data("processed_data_manual")
+
+# --- Hyperparameter Distribution ---
+param_dist = {
+    "n_estimators": [200, 300, 400, 500],
+    "max_depth": [3, 5, 7, -1],
+    "learning_rate": [0.01, 0.05, 0.1],
+    "subsample": [0.7, 0.8, 0.9],
+    "colsample_bytree": [0.7, 0.8, 0.9],
+    "reg_alpha": [0, 0.1, 0.5, 1],
+    "reg_lambda": [0, 0.1, 0.5, 1],
+    "num_leaves": [20, 31, 40, 50],
+}
+
+# --- Model & Search Setup ---
+count_neg = y_train.value_counts()[0]
+count_pos = y_train.value_counts()[1]
+scale_pos_weight_value = count_neg / count_pos
+
+lgb_model = lgb.LGBMClassifier(
+    objective="binary",
+    metric="logloss",
+    scale_pos_weight=scale_pos_weight_value,
+    random_state=42,
+    n_jobs=-1,
+)
+
+random_search = RandomizedSearchCV(
+    estimator=lgb_model,
+    param_distributions=param_dist,
+    n_iter=100,
+    scoring="average_precision",
+    cv=3,
+    verbose=2,
+    random_state=42,
+    n_jobs=-1,
+)
+
+# --- Run Search ---
+random_search.fit(X_train, y_train)
+
+# --- Results ---
+print(f"Best score (Average Precision): {random_search.best_score_:.4f}")
+print("Best parameters:")
+print(random_search.best_params_)
